@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "272011170653",
+    "project_id": "gallery-makassar-web-876-8c508",
+    "storage_bucket": "gallery-makassar-web-876-8c508.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:272011170653:android:059eb8ba884e63662e0eb4",
+        "android_client_info": {
+          "package_name": "com.example.myapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAQf9P1wNXMR0tiWTDmMhLgCjkq_IdIYN0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
