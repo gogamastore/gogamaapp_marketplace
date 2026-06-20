@@ -110,7 +110,8 @@ class CheckoutScreen extends StatelessWidget {
             isExpanded: true,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onChanged: (String? selectedId) {
               if (selectedId == null) return;
@@ -222,7 +223,6 @@ class CheckoutScreen extends StatelessWidget {
   // Section 3: Pilih pengiriman
   // ─────────────────────────────────────────────────────────────
   Widget _buildShippingSection(BuildContext context) {
-
     return _buildCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -254,7 +254,8 @@ class CheckoutScreen extends StatelessWidget {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text('JNE · J&T · SiCepat · GoSend · dan lainnya',
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    style:
+                        TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
               ),
             ],
           ),
@@ -311,8 +312,7 @@ class CheckoutScreen extends StatelessWidget {
                             : null,
                       )),
                   Text('Gratis — ambil langsung di toko',
-                      style:
-                          TextStyle(fontSize: 12, color: Colors.grey[600])),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600])),
                 ],
               ),
             ),
@@ -347,8 +347,9 @@ class CheckoutScreen extends StatelessWidget {
             title: 'Bayar via Midtrans',
             subtitle: 'GoPay · QRIS · VA Bank · Kartu Kredit · Minimarket',
             selectedValue: provider.selectedPaymentMethod,
-            onTap: () =>
-                context.read<CheckoutProvider>().selectPaymentMethod('midtrans'),
+            onTap: () => context
+                .read<CheckoutProvider>()
+                .selectPaymentMethod('midtrans'),
           ),
 
           if (provider.selectedPaymentMethod == 'midtrans') ...[
@@ -413,7 +414,8 @@ class CheckoutScreen extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected ? iconColor.withValues(alpha: 0.07) : Colors.grey[50],
+          color:
+              isSelected ? iconColor.withValues(alpha: 0.07) : Colors.grey[50],
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isSelected ? iconColor : Colors.grey[300]!,
@@ -598,8 +600,7 @@ class CheckoutScreen extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Subtotal',
-                    style: TextStyle(color: Colors.grey[600])),
+                Text('Subtotal', style: TextStyle(color: Colors.grey[600])),
                 Text(currency.format(provider.subtotal)),
               ],
             ),
@@ -607,8 +608,7 @@ class CheckoutScreen extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Pengiriman',
-                    style: TextStyle(color: Colors.grey[600])),
+                Text('Pengiriman', style: TextStyle(color: Colors.grey[600])),
                 Text(
                   hasShipping
                       ? currency.format(provider.shippingCost)
@@ -625,8 +625,8 @@ class CheckoutScreen extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text('Total',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 Text(
                   currency.format(provider.grandTotal),
                   style: const TextStyle(
@@ -644,12 +644,11 @@ class CheckoutScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                onPressed: provider.isProcessingOrder ||
-                        provider.isCreatingPayment
-                    ? null
-                    : () => _handlePlaceOrder(context),
-                child: provider.isProcessingOrder ||
-                        provider.isCreatingPayment
+                onPressed:
+                    provider.isProcessingOrder || provider.isCreatingPayment
+                        ? null
+                        : () => _handlePlaceOrder(context),
+                child: provider.isProcessingOrder || provider.isCreatingPayment
                     ? const SizedBox(
                         height: 20,
                         width: 20,
