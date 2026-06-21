@@ -1,4 +1,4 @@
-package com.example.myapp
+package Store.gallery.pos
 
 import io.flutter.embedding.android.FlutterActivity
 
