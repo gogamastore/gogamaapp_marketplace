@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../application/address_provider.dart';
 import '../domain/address.dart';
 import '../../../core/widgets/gogama_button.dart';
+import '../../checkout/data/biteship_service.dart';
+import '../../checkout/presentation/widgets/biteship_rates_widget.dart';
 import 'location_picker_screen.dart';
 
 class AddEditAddressScreen extends StatefulWidget {
@@ -30,26 +32,41 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
   double? _longitude;
   bool _locationPicked = false;
 
+  // ── Biteship area destination ─────────────────────────────────
+  // Disimpan ke Firestore agar checkout skip searchArea()
+  BiteshipArea? _selectedBiteshipArea;
+
   bool get _isEditing => widget.address != null;
 
   @override
   void initState() {
     super.initState();
-    _label      = widget.address?.label ?? '';
-    _name       = widget.address?.name ?? '';
-    _phone      = widget.address?.phone ?? '';
-    _province   = widget.address?.province ?? '';
+    _label = widget.address?.label ?? '';
+    _name = widget.address?.name ?? '';
+    _phone = widget.address?.phone ?? '';
+    _province = widget.address?.province ?? '';
     _postalCode = widget.address?.postalCode ?? '';
-    _isDefault  = widget.address?.isDefault ?? false;
+    _isDefault = widget.address?.isDefault ?? false;
 
-    _addressController = TextEditingController(text: widget.address?.address ?? '');
-    _cityController    = TextEditingController(text: widget.address?.city ?? '');
+    _addressController =
+        TextEditingController(text: widget.address?.address ?? '');
+    _cityController = TextEditingController(text: widget.address?.city ?? '');
 
     // Jika edit dan sudah ada koordinat, tandai sudah dipilih
     if (widget.address?.hasCoordinates == true) {
-      _latitude      = widget.address!.latitude;
-      _longitude     = widget.address!.longitude;
+      _latitude = widget.address!.latitude;
+      _longitude = widget.address!.longitude;
       _locationPicked = true;
+    }
+
+    // Jika edit dan sudah ada area Biteship, restore pilihan sebelumnya
+    if (widget.address?.hasBiteshipArea == true) {
+      _selectedBiteshipArea = BiteshipArea(
+        id: widget.address!.biteshipDestinationAreaId!,
+        name: widget.address!.biteshipDestinationAreaName ?? '',
+        adminName: '',
+        postalCode: widget.address!.postalCode,
+      );
     }
   }
 
@@ -75,8 +92,8 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
     if (result == null || !mounted) return;
 
     setState(() {
-      _latitude      = result.latitude;
-      _longitude     = result.longitude;
+      _latitude = result.latitude;
+      _longitude = result.longitude;
       _locationPicked = true;
 
       // Isi otomatis field dari hasil reverse geocoding
@@ -129,6 +146,10 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
       isDefault: _isDefault,
       latitude: _latitude,
       longitude: _longitude,
+      // ── Simpan area Biteship ke Firestore ──────────────────
+      // Checkout akan skip searchArea() dan langsung fetchRates()
+      biteshipDestinationAreaId: _selectedBiteshipArea?.id,
+      biteshipDestinationAreaName: _selectedBiteshipArea?.name,
     );
 
     try {
@@ -149,6 +170,79 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
     }
   }
 
+  // ── Section label helper ──────────────────────────────────────
+  Widget _buildSectionLabel(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 14,
+        color: Colors.black87,
+      ),
+    );
+  }
+
+  // ── Card pilih lokasi peta ────────────────────────────────────
+  Widget _buildLocationPickerCard() {
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: _locationPicked ? Colors.green : Colors.orange,
+          width: 1.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _locationPicked ? Icons.check_circle : Icons.map_outlined,
+                  color: _locationPicked ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _locationPicked
+                        ? 'Lokasi sudah ditentukan'
+                        : 'Belum ada lokasi — wajib diisi',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: _locationPicked ? Colors.green : Colors.orange,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_locationPicked && _latitude != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Lat: ${_latitude!.toStringAsFixed(6)}, '
+                'Lng: ${_longitude!.toStringAsFixed(6)}',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ],
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.pin_drop_outlined),
+                label: Text(_locationPicked
+                    ? 'Ubah Lokasi di Peta'
+                    : 'Pilih Lokasi di Peta'),
+                onPressed: _openLocationPicker,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -161,7 +255,6 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16.0),
           children: [
-
             // ── STEP 1: Pilih Lokasi di Peta ─────────────────────
             _buildSectionLabel('Langkah 1: Tentukan Lokasi di Peta'),
             const SizedBox(height: 8),
@@ -209,8 +302,9 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
               ),
               keyboardType: TextInputType.phone,
               onSaved: (v) => _phone = v ?? '',
-              validator: (v) =>
-                  (v == null || v.isEmpty) ? 'Nomor telepon tidak boleh kosong' : null,
+              validator: (v) => (v == null || v.isEmpty)
+                  ? 'Nomor telepon tidak boleh kosong'
+                  : null,
             ),
             const SizedBox(height: 16),
 
@@ -223,7 +317,8 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
                 border: const OutlineInputBorder(),
                 prefixIcon: const Icon(Icons.home_outlined),
                 suffixIcon: _locationPicked
-                    ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                    ? const Icon(Icons.check_circle,
+                        color: Colors.green, size: 20)
                     : null,
                 helperText: _locationPicked
                     ? 'Terisi otomatis dari peta — bisa diedit'
@@ -244,7 +339,8 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
                 border: const OutlineInputBorder(),
                 prefixIcon: const Icon(Icons.location_city_outlined),
                 suffixIcon: _locationPicked
-                    ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                    ? const Icon(Icons.check_circle,
+                        color: Colors.green, size: 20)
                     : null,
               ),
               validator: (v) =>
@@ -252,134 +348,144 @@ class _AddEditAddressScreenState extends State<AddEditAddressScreen> {
             ),
             const SizedBox(height: 16),
 
+            // Provinsi — dropdown sederhana / free text
             TextFormField(
               initialValue: _province,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'Provinsi',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.map_outlined),
-                suffixIcon: _locationPicked && _province.isNotEmpty
-                    ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
-                    : null,
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.map_outlined),
               ),
               onSaved: (v) => _province = v ?? '',
-              validator: (v) =>
-                  (v == null || v.isEmpty) ? 'Provinsi tidak boleh kosong' : null,
+              validator: (v) => (v == null || v.isEmpty)
+                  ? 'Provinsi tidak boleh kosong'
+                  : null,
             ),
             const SizedBox(height: 16),
 
+            // Kode Pos
             TextFormField(
               initialValue: _postalCode,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'Kode Pos',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.markunread_mailbox_outlined),
-                suffixIcon: _locationPicked && _postalCode.isNotEmpty
-                    ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
-                    : null,
+                hintText: 'Contoh: 90234',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.markunread_mailbox_outlined),
               ),
               keyboardType: TextInputType.number,
               onSaved: (v) => _postalCode = v ?? '',
-              validator: (v) =>
-                  (v == null || v.isEmpty) ? 'Kode pos tidak boleh kosong' : null,
+              validator: (v) => (v == null || v.isEmpty)
+                  ? 'Kode pos tidak boleh kosong'
+                  : null,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
 
+            // ── STEP 3: Pilih Area Biteship ───────────────────────
+            _buildSectionLabel('Langkah 3: Area Pengiriman (untuk cek ongkir)'),
+            const SizedBox(height: 4),
+            Text(
+              'Pilih area agar ongkir otomatis tampil saat checkout '
+              'tanpa perlu pencarian ulang.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // BiteshipAreaSearchField dari widget yang sudah ada
+            BiteshipAreaSearchField(
+              label: 'Kecamatan / Kota Tujuan',
+              initialArea: _selectedBiteshipArea,
+              onAreaSelected: (area) {
+                setState(() {
+                  _selectedBiteshipArea = area;
+                  // Auto-isi kode pos jika masih kosong
+                  if (_postalCode.isEmpty && area.postalCode.isNotEmpty) {
+                    _postalCode = area.postalCode;
+                  }
+                });
+              },
+            ),
+
+            // Status indikator area terpilih
+            if (_selectedBiteshipArea != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle,
+                        color: Colors.green.shade700, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _selectedBiteshipArea!.name,
+                        style: TextStyle(
+                          color: Colors.green.shade800,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              const SizedBox(height: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        color: Colors.orange.shade700, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Belum dipilih — ongkir mungkin tidak muncul '
+                        'otomatis di checkout.',
+                        style: TextStyle(
+                          color: Colors.orange.shade800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 24),
+
+            // ── Set Default ───────────────────────────────────────
             SwitchListTile(
-              title: const Text('Jadikan Alamat Utama'),
-              subtitle: const Text('Alamat ini akan dipilih otomatis saat checkout'),
               value: _isDefault,
               onChanged: (v) => setState(() => _isDefault = v),
+              title: const Text('Jadikan Alamat Utama'),
+              subtitle:
+                  const Text('Alamat ini akan dipilih otomatis saat checkout'),
               contentPadding: EdgeInsets.zero,
             ),
             const SizedBox(height: 32),
 
+            // ── Tombol Simpan ─────────────────────────────────────
             GogamaButton(
-              label: 'Simpan Alamat',
-              onPressed: _submit,
+              label: _isEditing ? 'Simpan Perubahan' : 'Simpan Alamat',
               isLoading: _isLoading,
+              onPressed: _submit,
             ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionLabel(String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontWeight: FontWeight.bold,
-        fontSize: 15,
-        color: Theme.of(context).colorScheme.primary,
-      ),
-    );
-  }
-
-  Widget _buildLocationPickerCard() {
-    return GestureDetector(
-      onTap: _openLocationPicker,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _locationPicked
-              ? Colors.green.withValues(alpha: 0.05)
-              : Colors.blue.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _locationPicked ? Colors.green : Colors.blue,
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: (_locationPicked ? Colors.green : Colors.blue)
-                    .withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                _locationPicked ? Icons.where_to_vote : Icons.add_location_alt_outlined,
-                color: _locationPicked ? Colors.green : Colors.blue,
-                size: 26,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _locationPicked ? 'Lokasi Dipilih ✓' : 'Pilih Lokasi di Peta',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: _locationPicked ? Colors.green[700] : Colors.blue[700],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  if (_locationPicked && _latitude != null)
-                    Text(
-                      '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    )
-                  else
-                    Text(
-                      'Geser peta untuk menentukan titik koordinat pengiriman Anda',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.chevron_right,
-              color: _locationPicked ? Colors.green : Colors.blue,
-            ),
+            const SizedBox(height: 24),
           ],
         ),
       ),
