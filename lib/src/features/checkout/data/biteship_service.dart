@@ -78,10 +78,14 @@ class BiteshipRate {
 
   String get categoryLabel {
     switch (category) {
-      case 'same_day': return 'Instan';
-      case 'next_day': return 'Next Day';
-      case 'cargo': return 'Cargo';
-      default: return 'Reguler';
+      case 'same_day':
+        return 'Instan';
+      case 'next_day':
+        return 'Next Day';
+      case 'cargo':
+        return 'Cargo';
+      default:
+        return 'Reguler';
     }
   }
 }
@@ -284,8 +288,7 @@ class BiteshipService {
     try {
       final callable = _functions.httpsCallable('trackBiteshipOrder');
       final result = await callable.call({'orderId': orderId});
-      return BiteshipTrackingInfo.fromMap(
-          result.data as Map<String, dynamic>);
+      return BiteshipTrackingInfo.fromMap(result.data as Map<String, dynamic>);
     } on FirebaseFunctionsException catch (_) {
       return const BiteshipTrackingInfo(hasDelivery: false);
     }
