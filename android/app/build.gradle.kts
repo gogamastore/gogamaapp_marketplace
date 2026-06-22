@@ -10,14 +10,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Corrected logic to read properties
+// ── Baca key.properties ───────────────────────────────────────────
+// File ini TIDAK di-commit ke Git (ada di .gitignore)
+val keyPropertiesFile = rootProject.file("key.properties")
 val keyProperties = Properties()
-// The key.properties file is located in the `android` folder, which is the rootProject for this gradle build.
-val keyPropertiesFile = rootProject.file("key.properties") 
 if (keyPropertiesFile.exists()) {
-    keyPropertiesFile.inputStream().use { input ->
-        keyProperties.load(input)
-    }
+    keyProperties.load(FileInputStream(keyPropertiesFile))
 }
 
 android {
@@ -53,12 +51,8 @@ android {
 
     buildTypes {
         release {
-            // Pakai debug signing agar SHA-1 yang sudah didaftarkan
-            // di Firebase Console tetap cocok dengan APK release
-            signingConfig = signingConfigs.getByName("debug")
-
-            // Nonaktifkan minify dulu untuk mempermudah debugging
-            // Aktifkan kembali setelah Firebase Functions berjalan normal
+            // Pakai gogama-release.keystore untuk APK release
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
         }
