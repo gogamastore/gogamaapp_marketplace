@@ -3,340 +3,297 @@ import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import '../../authentication/data/auth_service.dart';
 import '../domain/order.dart';
 
+// ─────────────────────────────────────────────────────────────────
+// Tab query logic:
+//
+//   "Belum Bayar"  → paymentStatus == 'pending_payment'
+//                    (otomatis hilang setelah 24 jam expire via webhook
+//                     Midtrans + Cloud Function checkExpiredOrders sweeper)
+//
+//   "Belum Proses" → status IN ['Pending','pending']
+//   "Diproses"     → status IN ['Processing','processing']
+//   "Dikirim"      → status IN ['Shipped','shipped']
+//   "Selesai"      → status IN ['Delivered','delivered']
+//
+//   "Dibatalkan"   → paymentStatus IN ['cancelled','failed']
+//                    'cancelled' = dibatalkan user
+//                    'failed'    = expire 24 jam (webhook Midtrans/sweeper)
+//
+//   "Semua"        → tanpa filter
+// ─────────────────────────────────────────────────────────────────
+
 class OrderHistoryScreen extends StatefulWidget {
-  const OrderHistoryScreen({super.key});
+  final String? initialTab;
+  const OrderHistoryScreen({super.key, this.initialTab});
 
   @override
   State<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
 }
 
-class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
-  String _selectedStatus = 'Semua';
+class _OrderHistoryScreenState extends State<OrderHistoryScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
 
-  final List<String> _statusFilters = [
-    'Semua',
-    'Belum Proses',
-    'Diproses',
-    'Dikirim',
-    'Selesai',
-    'Dibatalkan',
+  static const _tabs = [
+    _Tab('Belum Bayar', 'pending_payment'),
+    _Tab('Belum Proses', 'pending'),
+    _Tab('Diproses', 'processing'),
+    _Tab('Dikirim', 'shipped'),
+    _Tab('Selesai', 'delivered'),
+    _Tab('Dibatalkan', 'cancelled'),
+    _Tab('Semua', 'semua'),
   ];
 
   @override
   void initState() {
     super.initState();
     initializeDateFormatting('id_ID');
+    int initialIndex = 1;
+    if (widget.initialTab != null) {
+      final idx = _tabs.indexWhere((t) => t.key == widget.initialTab);
+      if (idx >= 0) initialIndex = idx;
+    }
+    _tabController = TabController(
+        length: _tabs.length, vsync: this, initialIndex: initialIndex);
   }
 
-  List<String> _getFirestoreStatuses(String displayStatus) {
-    switch (displayStatus) {
-      case 'Belum Proses':
-        return ['Pending', 'pending'];
-      case 'Diproses':
-        return ['Processing', 'processing'];
-      case 'Dikirim':
-        return ['shipped', 'Shipped'];
-      case 'Selesai':
-        return ['delivered', 'Delivered'];
-      case 'Dibatalkan':
-        return ['Cancelled', 'cancelled'];
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final userId = context.read<AuthService>().currentUser?.uid;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Riwayat Pesanan'),
+        elevation: 1,
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: _tabs.map((t) => Tab(text: t.label)).toList(),
+          indicatorColor: Theme.of(context).colorScheme.primary,
+          labelColor: Theme.of(context).colorScheme.primary,
+          unselectedLabelColor: Colors.grey[600],
+          labelStyle:
+              const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
+      ),
+      body: userId == null
+          ? const Center(child: Text('Silakan login.'))
+          : TabBarView(
+              controller: _tabController,
+              children: _tabs
+                  .map((t) => _OrderListTab(userId: userId, tabKey: t.key))
+                  .toList(),
+            ),
+    );
+  }
+}
+
+class _Tab {
+  final String label;
+  final String key;
+  const _Tab(this.label, this.key);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Widget list per-tab
+// ─────────────────────────────────────────────────────────────────
+class _OrderListTab extends StatelessWidget {
+  final String userId;
+  final String tabKey;
+  const _OrderListTab({required this.userId, required this.tabKey});
+
+  Query _buildQuery() {
+    final base = FirebaseFirestore.instance
+        .collection('orders')
+        .where('customerId', isEqualTo: userId)
+        .orderBy('date', descending: true);
+
+    switch (tabKey) {
+      case 'pending_payment':
+        // Belum Bayar — otomatis bersih setelah webhook expire (24 jam)
+        return FirebaseFirestore.instance
+            .collection('orders')
+            .where('customerId', isEqualTo: userId)
+            .where('paymentStatus', isEqualTo: 'pending_payment')
+            .orderBy('date', descending: true);
+
+      case 'pending':
+        return base.where('status', whereIn: ['Pending', 'pending']);
+      case 'processing':
+        return base.where('status', whereIn: ['Processing', 'processing']);
+      case 'shipped':
+        return base.where('status', whereIn: ['Shipped', 'shipped']);
+      case 'delivered':
+        return base.where('status', whereIn: ['Delivered', 'delivered']);
+
+      case 'cancelled':
+        // Dibatalkan: mencakup cancelled (user) DAN failed (expire Midtrans)
+        return FirebaseFirestore.instance
+            .collection('orders')
+            .where('customerId', isEqualTo: userId)
+            .where('paymentStatus', whereIn: ['cancelled', 'failed']).orderBy(
+                'date',
+                descending: true);
+
       default:
-        return [];
+        return base;
+    }
+  }
+
+  String get _emptyMessage {
+    switch (tabKey) {
+      case 'pending_payment':
+        return 'Tidak ada pesanan yang menunggu pembayaran.';
+      case 'pending':
+        return 'Tidak ada pesanan yang belum diproses.';
+      case 'processing':
+        return 'Tidak ada pesanan yang sedang diproses.';
+      case 'shipped':
+        return 'Tidak ada pesanan yang sedang dikirim.';
+      case 'delivered':
+        return 'Belum ada pesanan yang selesai.';
+      case 'cancelled':
+        return 'Tidak ada pesanan yang dibatalkan.';
+      default:
+        return 'Anda belum memiliki riwayat pesanan.';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final String? userId = authService.currentUser?.uid;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Riwayat Pesanan'),
-        elevation: 1,
-      ),
-      body: Column(
-        children: [
-          _buildHeader(),
-          _buildStatusFilter(),
-          Expanded(
-            child: userId == null
-                ? const Center(child: Text('Silakan login untuk melihat riwayat.'))
-                : _buildOrderList(userId),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16.0),
-      color: Theme.of(context).canvasColor,
-      child: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Pesanan Saya', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-          SizedBox(height: 4),
-          Text('Lihat semua riwayat transaksi Anda di sini.', style: TextStyle(fontSize: 14, color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusFilter() {
-    return Container(
-      height: 90,
-      padding: const EdgeInsets.symmetric(vertical: 12.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).canvasColor,
-        border: Border(bottom: BorderSide(color: Colors.grey[200]!, width: 1)),
-      ),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12.0),
-        itemCount: _statusFilters.length,
-        itemBuilder: (context, index) {
-          final status = _statusFilters[index];
-          final isSelected = status == _selectedStatus;
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4.0),
-            child: ChoiceChip(
-              label: Text(status),
-              selected: isSelected,
-              onSelected: (selected) {
-                if (selected) {
-                  setState(() {
-                    _selectedStatus = status;
-                  });
-                }
-              },
-              backgroundColor: isSelected ? Colors.deepPurple[100] : Colors.grey[100],
-              selectedColor: Colors.deepPurple,
-              labelStyle: TextStyle(
-                color: isSelected ? Colors.white : Colors.black87,
-                fontWeight: FontWeight.bold,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: isSelected ? Colors.deepPurple : Colors.grey[300]!),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildOrderList(String userId) {
-    Query query = FirebaseFirestore.instance
-        .collection('orders')
-        .where('customerId', isEqualTo: userId)
-        .orderBy('date', descending: true);
-
-    if (_selectedStatus != 'Semua') {
-      final firestoreStatuses = _getFirestoreStatuses(_selectedStatus);
-      query = query.where('status', whereIn: firestoreStatuses);
-    }
-
     return StreamBuilder<QuerySnapshot>(
-      stream: query.snapshots(),
+      stream: _buildQuery().snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
-          return Center(child: Text('Terjadi kesalahan: ${snapshot.error}'));
+          return Center(child: Text('Error: ${snapshot.error}'));
         }
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.receipt_long, size: 80, color: Colors.grey[400]),
+                Icon(Icons.receipt_long_outlined,
+                    size: 80, color: Colors.grey[300]),
                 const SizedBox(height: 16),
-                Text(
-                  _selectedStatus == 'Semua' 
-                      ? 'Anda belum memiliki riwayat pesanan'
-                      : 'Tidak ada pesanan dengan status "$_selectedStatus"',
-                  style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                  textAlign: TextAlign.center,
-                ),
+                Text(_emptyMessage,
+                    style: TextStyle(fontSize: 15, color: Colors.grey[500]),
+                    textAlign: TextAlign.center),
               ],
             ),
           );
         }
-
-        final orders = snapshot.data!.docs.map((doc) => Order.fromFirestore(doc)).toList();
-
+        final orders =
+            snapshot.data!.docs.map((doc) => Order.fromFirestore(doc)).toList();
         return ListView.builder(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(12),
           itemCount: orders.length,
-          itemBuilder: (context, index) {
-            return OrderCard(order: orders[index]);
-          },
+          itemBuilder: (_, i) => _OrderCard(order: orders[i]),
         );
       },
     );
   }
 }
 
-class OrderCard extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────
+// OrderCard
+// ─────────────────────────────────────────────────────────────────
+class _OrderCard extends StatelessWidget {
   final Order order;
-
-  const OrderCard({super.key, required this.order});
-
-  String _normalizeStatus(String status) {
-    final s = status.toLowerCase();
-    if (s == 'pending') return 'Belum Proses';
-    if (s == 'processing') return 'Diproses';
-    if (s == 'shipped') return 'Dikirim';
-    if (s == 'delivered') return 'Selesai';
-    if (s == 'cancelled') return 'Dibatalkan';
-    return status; // Fallback
-  }
-
-  String _normalizePaymentStatus(String paymentStatus) {
-    final ps = paymentStatus.toLowerCase();
-    if (ps == 'unpaid') return 'Belum Bayar';
-    if (ps == 'paid') return 'Lunas';
-    return paymentStatus; // Fallback
-  }
-  
-  void _showConfirmationDialog(BuildContext context, String orderId) {
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Konfirmasi Pesanan'),
-          content: const Text('Apakah Anda yakin pesanan ini telah diterima?'),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Batal', style: TextStyle(color: Colors.grey)),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
-            ),
-            TextButton(
-              child: const Text('Ya'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                _updateOrderStatusToDelivered(context, orderId);
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _updateOrderStatusToDelivered(BuildContext context, String orderId) {
-    FirebaseFirestore.instance
-        .collection('orders')
-        .doc(orderId)
-        .update({'status': 'delivered'})
-        .then((_) {
-      // --- PERBAIKAN DIMULAI DI SINI ---
-      if (!context.mounted) return; // Cek jika widget masih ada di tree
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Status pesanan berhasil diperbarui ke "Selesai".'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }).catchError((error) {
-      if (!context.mounted) return; // Cek jika widget masih ada di tree
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Gagal memperbarui status: $error'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    });
-    // --- PERBAIKAN BERAKHIR DI SINI ---
-  }
+  const _OrderCard({required this.order});
 
   @override
   Widget build(BuildContext context) {
-    final normalizedStatus = _normalizeStatus(order.status);
+    final currency =
+        NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
     return Card(
-      elevation: 3,
-      margin: const EdgeInsets.only(bottom: 16.0),
+      margin: const EdgeInsets.only(bottom: 10),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 1,
       child: InkWell(
-        onTap: () {
-          context.push('/order-detail', extra: order);
-        },
         borderRadius: BorderRadius.circular(12),
+        onTap: () => context.push('/order-detail', extra: order),
         child: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Header
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('#${order.id.substring(0, 8).toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  _buildStatusChip(normalizedStatus),
-                ],
-              ),
-              Text(order.formattedDate, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-              const Divider(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(order.customer, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(height: 4),
-                        Text('${order.totalProducts} produk • ${order.formattedTotal}', style: TextStyle(color: Colors.grey[700])),
-                        const SizedBox(height: 8),
-                        Text(order.paymentMethod.replaceAll('_', ' ').toUpperCase(), style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                      ],
+                    child: Text(
+                      '#${order.id.substring(0, order.id.length.clamp(0, 8)).toUpperCase()}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 13),
                     ),
                   ),
-                  _buildPaymentStatusText(_normalizePaymentStatus(order.paymentStatus)),
+                  Text(order.formattedDate,
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500])),
                 ],
               ),
               const SizedBox(height: 8),
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+
+              // Produk
+              ...order.products.take(2).map((p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text('${p.name} ×${p.quantity}',
+                        style: const TextStyle(fontSize: 13),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  )),
+              if (order.products.length > 2)
+                Text('+${order.products.length - 2} produk lainnya',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+              const SizedBox(height: 10),
+
+              // Footer
+              Row(
                 children: [
-                   Text('Lihat Detail', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                   SizedBox(width: 4),
-                   Icon(Icons.chevron_right, color: Colors.grey, size: 18),
+                  Expanded(
+                    child: Text(currency.format(order.total),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 14)),
+                  ),
+                  _buildPaymentBadge(order.paymentStatus),
+                  const SizedBox(width: 6),
+                  _buildStatusBadge(order.status),
                 ],
               ),
 
-              if (normalizedStatus == 'Dikirim')
-                Padding(
-                  padding: const EdgeInsets.only(top: 16.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        _showConfirmationDialog(context, order.id);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('Pesanan Diterima'),
+              // Tombol Bayar — hanya jika pending_payment
+              if (order.isPendingPayment) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.payment, size: 16),
+                    label: const Text('Bayar Sekarang'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
+                    onPressed: () => _openPayment(context),
                   ),
                 ),
+              ],
             ],
           ),
         ),
@@ -344,55 +301,98 @@ class OrderCard extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusChip(String status) {
-    Color chipColor;
-    switch (status) {
-      case 'Belum Proses':
-        chipColor = Colors.orange;
-        break;
-      case 'Diproses':
-        chipColor = Colors.blue;
-        break;
-      case 'Dikirim':
-        chipColor = Colors.lightGreen;
-        break;
-      case 'Selesai':
-        chipColor = Colors.green;
-        break;
-      case 'Dibatalkan':
-        chipColor = Colors.red;
-        break;
-      default:
-        chipColor = Colors.grey;
+  void _openPayment(BuildContext context) {
+    final url = order.midtransRedirectUrl;
+    if (url == null || url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'URL pembayaran tidak tersedia. Mungkin sudah kadaluarsa.')),
+      );
+      return;
     }
-
-    return Chip(
-      label: Text(status, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-      backgroundColor: chipColor,
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 0),
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
+    context.push('/payment-webview', extra: {
+      'orderId': order.id,
+      'redirectUrl': url,
+    });
   }
 
-  Widget _buildPaymentStatusText(String paymentStatus) {
-    Color textColor;
-    switch (paymentStatus) {
-      case 'Lunas':
-        textColor = Colors.green[700]!;
+  Widget _buildStatusBadge(String status) {
+    final s = status.toLowerCase();
+    Color color;
+    String label;
+    if (s == 'pending') {
+      color = Colors.orange;
+      label = 'Belum Proses';
+    } else if (s == 'processing') {
+      color = Colors.blue;
+      label = 'Diproses';
+    } else if (s == 'shipped') {
+      color = Colors.lightGreen;
+      label = 'Dikirim';
+    } else if (s == 'delivered') {
+      color = Colors.green;
+      label = 'Selesai';
+    } else if (s == 'cancelled') {
+      color = Colors.red;
+      label = 'Dibatalkan';
+    } else {
+      color = Colors.grey;
+      label = status;
+    }
+    return _Badge(label: label, color: color);
+  }
+
+  Widget _buildPaymentBadge(String ps) {
+    Color color;
+    String label;
+    switch (ps.toLowerCase()) {
+      case 'paid':
+      case 'settlement':
+        color = Colors.green;
+        label = 'Lunas';
         break;
-      case 'Belum Bayar':
-        textColor = Colors.red[700]!;
+      case 'pending_payment':
+        color = Colors.orange;
+        label = 'Belum Bayar';
+        break;
+      case 'cancelled':
+        color = Colors.red;
+        label = 'Dibatalkan';
+        break;
+      case 'failed':
+        color = Colors.red;
+        label = 'Kadaluarsa';
         break;
       default:
-        textColor = Colors.grey;
+        color = Colors.grey;
+        label = ps;
     }
+    return _Badge(label: label, color: color);
+  }
+}
 
-    return Text(
-      paymentStatus,
-      style: TextStyle(
-        color: textColor,
-        fontWeight: FontWeight.bold,
-        fontSize: 14,
+class _Badge extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _Badge({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: color.withValues(alpha: 0.9),
+        ),
       ),
     );
   }
