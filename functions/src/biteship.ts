@@ -445,32 +445,41 @@ export const trackBiteshipOrder = onCall(
       const resp = await api.get(`/v1/orders/${biteshipOrderId}`);
       const biteshipData = resp.data;
 
-      // Ambil history tracking jika waybill tersedia
+      // Resolve waybillId & courierTrackingId — gabungkan dari Firestore + response Biteship
+      const freshWaybillId = (biteshipData.waybill_id as string | undefined) || waybillId || "";
+      const freshTrackingId = (biteshipData.courier?.tracking_id as string | undefined)
+        || (order.biteshipCourierTrackingId as string | undefined)
+        || "";
+      const freshTrackingUrl = freshTrackingId
+        ? `https://track.biteship.com/${freshTrackingId}`
+        : "";
+
+      // Ambil history tracking menggunakan waybillId terbaru
       let trackingHistory: any[] = [];
-      if (waybillId) {
+      if (freshWaybillId) {
         try {
-          const trackResp = await api.get(`/v1/trackings/${waybillId}`);
+          const trackResp = await api.get(`/v1/trackings/${freshWaybillId}`);
           trackingHistory = trackResp.data.history ?? [];
         } catch {
           // history belum tersedia, lanjutkan
         }
       }
 
-      // Sync status ke Firestore jika berubah
+      // Sync ke Firestore — perbaiki semua field yang salah/kosong
       const newStatus = mapBiteshipStatus(biteshipData.status);
-      const freshTrackingId = biteshipData.courier?.tracking_id ?? (order.biteshipCourierTrackingId as string | undefined) ?? "";
-      const freshTrackingUrl = freshTrackingId
-        ? `https://track.biteship.com/${freshTrackingId}`
-        : order.deliveryTrackingUrl ?? "";
-
       const updateFields: Record<string, any> = {
         biteshipStatus: biteshipData.status,
         updatedAt: FieldValue.serverTimestamp(),
       };
       if (newStatus && newStatus !== order.status) updateFields.status = newStatus;
-      if (biteshipData.waybill_id && !order.waybillId) updateFields.waybillId = biteshipData.waybill_id;
+      // Isi waybillId jika Firestore masih kosong tapi Biteship sudah punya
+      if (freshWaybillId && !order.waybillId) updateFields.waybillId = freshWaybillId;
+      // Isi biteshipCourierTrackingId jika belum ada
       if (freshTrackingId && !order.biteshipCourierTrackingId) {
         updateFields.biteshipCourierTrackingId = freshTrackingId;
+      }
+      // Selalu perbaiki deliveryTrackingUrl jika tidak sesuai format track.biteship.com
+      if (freshTrackingUrl && order.deliveryTrackingUrl !== freshTrackingUrl) {
         updateFields.deliveryTrackingUrl = freshTrackingUrl;
       }
       await db.collection("orders").doc(orderId).update(updateFields);
@@ -478,7 +487,7 @@ export const trackBiteshipOrder = onCall(
       return {
         hasDelivery: true,
         biteshipOrderId,
-        waybillId: biteshipData.waybill_id ?? waybillId ?? "",
+        waybillId: freshWaybillId,
         status: biteshipData.status,
         courierName: biteshipData.courier?.company ?? order.biteshipCourierCode,
         driverName: biteshipData.courier?.driver_name ?? "",
