@@ -375,24 +375,43 @@ export const createBiteshipOrder = onCall(
 
       const biteshipOrder = resp.data;
 
+      // Biteship kadang tidak langsung mengembalikan waybill_id di POST response.
+      // Fetch GET order segera untuk memastikan waybill_id & courier.tracking_id tersedia.
+      let waybillId: string = biteshipOrder.waybill_id ?? "";
+      let courierTrackingId: string = biteshipOrder.courier?.tracking_id ?? "";
+
+      try {
+        const getResp = await api.get(`/v1/orders/${biteshipOrder.id}`);
+        const fetched = getResp.data;
+        if (!waybillId && fetched.waybill_id) waybillId = fetched.waybill_id;
+        if (!courierTrackingId && fetched.courier?.tracking_id) courierTrackingId = fetched.courier.tracking_id;
+      } catch (fetchErr: any) {
+        logger.warn("createBiteshipOrder: GET order gagal, pakai data POST", fetchErr?.message);
+      }
+
+      const trackingUrl = courierTrackingId
+        ? `https://track.biteship.com/${courierTrackingId}`
+        : "";
+
       await db.collection("orders").doc(orderId).update({
         biteshipOrderId: biteshipOrder.id,
-        waybillId: biteshipOrder.waybill_id ?? "",
+        waybillId,
         biteshipStatus: biteshipOrder.status,
-        biteshipCourierTrackingId: biteshipOrder.courier?.tracking_id ?? "",
-        deliveryTrackingUrl: `https://biteship.com/tracking/${biteshipOrder.waybill_id ?? ""}`,
+        biteshipCourierTrackingId: courierTrackingId,
+        deliveryTrackingUrl: trackingUrl,
         status: "Dikirim",
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      logger.info(`Biteship order: ${biteshipOrder.id} | Waybill: ${biteshipOrder.waybill_id}`);
+      logger.info(`Biteship order: ${biteshipOrder.id} | Waybill: ${waybillId} | TrackingId: ${courierTrackingId}`);
 
       return {
         success: true,
         biteshipOrderId: biteshipOrder.id,
-        waybillId: biteshipOrder.waybill_id,
+        courierTrackingId,
+        waybillId,
         status: biteshipOrder.status,
-        trackingUrl: `https://biteship.com/tracking/${biteshipOrder.waybill_id ?? ""}`,
+        trackingUrl,
       };
     } catch (err: any) {
       const errData = err?.response?.data;
@@ -439,23 +458,33 @@ export const trackBiteshipOrder = onCall(
 
       // Sync status ke Firestore jika berubah
       const newStatus = mapBiteshipStatus(biteshipData.status);
-      if (newStatus && newStatus !== order.status) {
-        await db.collection("orders").doc(orderId).update({
-          status: newStatus,
-          biteshipStatus: biteshipData.status,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+      const freshTrackingId = biteshipData.courier?.tracking_id ?? (order.biteshipCourierTrackingId as string | undefined) ?? "";
+      const freshTrackingUrl = freshTrackingId
+        ? `https://track.biteship.com/${freshTrackingId}`
+        : order.deliveryTrackingUrl ?? "";
+
+      const updateFields: Record<string, any> = {
+        biteshipStatus: biteshipData.status,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (newStatus && newStatus !== order.status) updateFields.status = newStatus;
+      if (biteshipData.waybill_id && !order.waybillId) updateFields.waybillId = biteshipData.waybill_id;
+      if (freshTrackingId && !order.biteshipCourierTrackingId) {
+        updateFields.biteshipCourierTrackingId = freshTrackingId;
+        updateFields.deliveryTrackingUrl = freshTrackingUrl;
       }
+      await db.collection("orders").doc(orderId).update(updateFields);
 
       return {
         hasDelivery: true,
         biteshipOrderId,
-        waybillId: waybillId ?? "",
+        waybillId: biteshipData.waybill_id ?? waybillId ?? "",
         status: biteshipData.status,
         courierName: biteshipData.courier?.company ?? order.biteshipCourierCode,
         driverName: biteshipData.courier?.driver_name ?? "",
         driverPhone: biteshipData.courier?.driver_phone ?? "",
-        trackingUrl: `https://biteship.com/tracking/${waybillId ?? ""}`,
+        courierTrackingId: freshTrackingId,
+        trackingUrl: freshTrackingUrl,
         history: trackingHistory.map((h: any) => ({
           timestamp: h.updated_at,
           status: h.status,
@@ -520,12 +549,11 @@ export const biteshipWebhook = onRequest(
       };
 
       if (newOrderStatus) updateData.status = newOrderStatus;
-      if (waybillId) {
-        updateData.waybillId = waybillId;
-        updateData.deliveryTrackingUrl = `https://biteship.com/tracking/${waybillId}`;
-      }
+      if (waybillId) updateData.waybillId = waybillId;
       if (event.order?.courier?.tracking_id) {
-        updateData.biteshipCourierTrackingId = event.order.courier.tracking_id;
+        const tid = event.order.courier.tracking_id as string;
+        updateData.biteshipCourierTrackingId = tid;
+        updateData.deliveryTrackingUrl = `https://track.biteship.com/${tid}`;
       }
 
       await orderDoc.ref.update(updateData);
@@ -548,11 +576,4 @@ function mapBiteshipStatus(s?: string): string | null {
   if (lower.includes("delivered")) return "Selesai";
   if (lower.includes("cancelled") || lower.includes("failed") || lower.includes("returned")) return "Dibatalkan";
   return null;
-<<<<<<< HEAD
 }
-=======
-}
-
-
-
->>>>>>> 6d80cf66d5c337a9b7e299e7fc51ad611b995e11
