@@ -375,23 +375,25 @@ export const createBiteshipOrder = onCall(
 
       const biteshipOrder = resp.data;
 
-      // Biteship kadang tidak langsung mengembalikan waybill_id di POST response.
-      // Fetch GET order segera untuk memastikan waybill_id & courier.tracking_id tersedia.
-      let waybillId: string = biteshipOrder.waybill_id ?? "";
+      // Resi ada di courier.waybill_id (bukan top-level waybill_id).
+      // Fetch GET order segera untuk memastikan semua field tersedia.
+      let waybillId: string = biteshipOrder.courier?.waybill_id ?? "";
       let courierTrackingId: string = biteshipOrder.courier?.tracking_id ?? "";
+      let trackingUrl: string = biteshipOrder.courier?.link ?? "";
 
       try {
         const getResp = await api.get(`/v1/orders/${biteshipOrder.id}`);
         const fetched = getResp.data;
-        if (!waybillId && fetched.waybill_id) waybillId = fetched.waybill_id;
-        if (!courierTrackingId && fetched.courier?.tracking_id) courierTrackingId = fetched.courier.tracking_id;
+        if (!waybillId) waybillId = fetched.courier?.waybill_id ?? "";
+        if (!courierTrackingId) courierTrackingId = fetched.courier?.tracking_id ?? "";
+        if (!trackingUrl) trackingUrl = fetched.courier?.link ?? "";
       } catch (fetchErr: any) {
         logger.warn("createBiteshipOrder: GET order gagal, pakai data POST", fetchErr?.message);
       }
 
-      const trackingUrl = courierTrackingId
-        ? `https://track.biteship.com/${courierTrackingId}`
-        : "";
+      if (!trackingUrl && courierTrackingId) {
+        trackingUrl = `https://track.biteship.com/${courierTrackingId}`;
+      }
 
       await db.collection("orders").doc(orderId).update({
         biteshipOrderId: biteshipOrder.id,
@@ -445,14 +447,13 @@ export const trackBiteshipOrder = onCall(
       const resp = await api.get(`/v1/orders/${biteshipOrderId}`);
       const biteshipData = resp.data;
 
-      // Resolve waybillId & courierTrackingId — gabungkan dari Firestore + response Biteship
-      const freshWaybillId = (biteshipData.waybill_id as string | undefined) || waybillId || "";
+      // Resolve waybillId & courierTrackingId — resi ada di courier.waybill_id
+      const freshWaybillId = (biteshipData.courier?.waybill_id as string | undefined) || waybillId || "";
       const freshTrackingId = (biteshipData.courier?.tracking_id as string | undefined)
         || (order.biteshipCourierTrackingId as string | undefined)
         || "";
-      const freshTrackingUrl = freshTrackingId
-        ? `https://track.biteship.com/${freshTrackingId}`
-        : "";
+      const freshTrackingUrl = (biteshipData.courier?.link as string | undefined)
+        || (freshTrackingId ? `https://track.biteship.com/${freshTrackingId}` : "");
 
       // Ambil history tracking menggunakan waybillId terbaru
       let trackingHistory: any[] = [];
@@ -550,7 +551,8 @@ export const biteshipWebhook = onRequest(
 
       const orderDoc = orderQuery.docs[0];
       const newOrderStatus = mapBiteshipStatus(event.order?.status);
-      const waybillId = event.order?.waybill_id as string | undefined;
+      // Resi ada di courier.waybill_id
+      const waybillId = (event.order?.courier?.waybill_id ?? event.order?.waybill_id) as string | undefined;
 
       const updateData: Record<string, any> = {
         biteshipStatus: event.order?.status,
